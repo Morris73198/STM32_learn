@@ -2,7 +2,7 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : 麥克納姆輪車控制程序 - 完整版含USART3測試，已修復ID衝突
+  * @brief          : 麦克纳姆轮车控制程序 - 全USART1版本，ID=1,2,3,4
   ******************************************************************************
   * @attention
   *
@@ -29,15 +29,15 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-// A1-16舵機控制結構體
+// A1-16舵机控制结构体
 typedef struct {
     uint8_t id;
     UART_HandleTypeDef *huart;
     uint8_t rx_buffer[100];
     uint8_t tx_buffer[100];
     bool response_received;
-    char name[20];  // 輪子名稱
-    int16_t current_speed;  // 當前速度
+    char name[20];  // 轮子名称
+    int16_t current_speed;  // 当前速度
 } A1_16_Handle;
 
 typedef struct {
@@ -50,19 +50,19 @@ typedef struct {
     uint8_t status_detail;
 } A1_16_Status;
 
-// 麥克納姆輪車結構體
+// 麦克纳姆轮车结构体
 typedef struct {
-    A1_16_Handle front_right;  // 右前輪 USART1, ID=7
-    A1_16_Handle front_left;   // 左前輪 USART1, ID=8
-    A1_16_Handle rear_left;    // 左後輪 USART3, ID=9
-    A1_16_Handle rear_right;   // 右後輪 USART3, ID=10
-    float wheel_radius;        // 輪子半徑 (mm)
-    float wheel_base;          // 軸距 (mm)
-    float track_width;         // 輪距 (mm)
-    bool initialized;          // 初始化狀態
+    A1_16_Handle front_right;  // 右前轮 USART1, ID=1
+    A1_16_Handle front_left;   // 左前轮 USART1, ID=2
+    A1_16_Handle rear_left;    // 左后轮 USART1, ID=3
+    A1_16_Handle rear_right;   // 右后轮 USART1, ID=4
+    float wheel_radius;        // 轮子半径 (mm)
+    float wheel_base;          // 轴距 (mm)
+    float track_width;         // 轮距 (mm)
+    bool initialized;          // 初始化状态
 } MecanumCar;
 
-// 運動狀態枚舉
+// 运动状态枚举
 typedef enum {
     CAR_STOP = 0,
     CAR_FORWARD,
@@ -81,7 +81,7 @@ typedef enum {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-// A1-16 命令定義
+// A1-16 命令定义
 #define A1_16_CMD_EEP_WRITE    0x01
 #define A1_16_CMD_EEP_READ     0x02
 #define A1_16_CMD_RAM_WRITE    0x03
@@ -98,16 +98,19 @@ typedef enum {
 #define A1_16_MODE_TORQUE_OFF  2
 #define A1_16_MODE_SERVO_ON    3
 
-// 麥克納姆輪參數
+// 麦克纳姆轮参数
 #define WHEEL_RADIUS    50.0f   // mm
 #define WHEEL_BASE      200.0f  // mm
 #define TRACK_WIDTH     180.0f  // mm
 #define MAX_SPEED       100     // 最大速度值
 #define MIN_SPEED       10      // 最小有效速度
 
-// 調試開關
+// 调试开关
 #define DEBUG_ENABLED   1
 #define DEBUG_SERVO_STATUS  1
+
+// 舵机ID设置开关 - 首次运行时设为1，设置完成后改为0
+#define SETUP_SERVO_IDS 0
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -122,13 +125,12 @@ typedef enum {
 /* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
-UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
 MecanumCar car;
 CarMovementState current_state = CAR_STOP;
 uint32_t last_command_time = 0;
-uint8_t test_mode = 0;  // 0=自動測試, 1=單輪測試, 2=基本運動, 3=高級運動
+uint8_t test_mode = 0;  // 0=自动测试, 1=单轮测试, 2=基本运动, 3=高级运动
 bool button_pressed = false;
 /* USER CODE END PV */
 
@@ -137,10 +139,9 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_USART3_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
-// A1-16舵機控制函數
+// A1-16舵机控制函数
 HAL_StatusTypeDef A1_16_Init(A1_16_Handle *handle, UART_HandleTypeDef *huart, uint8_t id, const char* name);
 HAL_StatusTypeDef A1_16_SetSpeed(A1_16_Handle *handle, int16_t speed);
 HAL_StatusTypeDef A1_16_GetStatus(A1_16_Handle *handle, A1_16_Status *status);
@@ -149,16 +150,16 @@ HAL_StatusTypeDef A1_16_TorqueOn(A1_16_Handle *handle);
 HAL_StatusTypeDef A1_16_SetID(A1_16_Handle *handle, uint8_t old_id, uint8_t new_id);
 HAL_StatusTypeDef A1_16_Reboot(A1_16_Handle *handle);
 
-// 內部函數
+// 内部函数
 static HAL_StatusTypeDef A1_16_SendPacket(A1_16_Handle *handle, uint8_t cmd, uint8_t *data, uint8_t data_len);
 static HAL_StatusTypeDef A1_16_ReceiveResponse(A1_16_Handle *handle, uint8_t expected_cmd, uint32_t timeout);
 static uint8_t A1_16_CalculateChecksum1(uint8_t *data, uint8_t length);
 static uint8_t A1_16_CalculateChecksum2(uint8_t checksum1);
 
-// 舵機ID設置函數
-HAL_StatusTypeDef Setup_ServoIDs(void);
+// 舵机ID设置函数
+HAL_StatusTypeDef Setup_NewServoIDs(void);
 
-// 麥克納姆輪運動控制函數
+// 麦克纳姆轮运动控制函数
 void Mecanum_Init(MecanumCar *car);
 void Mecanum_SetVelocity(MecanumCar *car, float vx, float vy, float omega);
 void Mecanum_Forward(MecanumCar *car, int16_t speed);
@@ -173,7 +174,7 @@ void Mecanum_DiagonalFrontRight(MecanumCar *car, int16_t speed);
 void Mecanum_DiagonalBackLeft(MecanumCar *car, int16_t speed);
 void Mecanum_DiagonalBackRight(MecanumCar *car, int16_t speed);
 
-// 測試和調試函數
+// 测试和调试函数
 void Test_IndividualWheel(A1_16_Handle *wheel, int16_t speed, uint32_t duration);
 void Test_AllWheels(MecanumCar *car);
 void Test_BasicMovements(MecanumCar *car);
@@ -182,16 +183,12 @@ void Check_ServoStatus(A1_16_Handle *handle);
 void Check_AllServos(MecanumCar *car);
 void Scan_ServoIDs(UART_HandleTypeDef *huart, const char* uart_name);
 
-// USART3 測試函數
-void Test_USART3_Loopback(void);
-void Test_USART3_Raw(void);
-
-// 系統函數
+// 系统函数
 void System_Info(void);
 void Change_TestMode(void);
 void Handle_ButtonPress(void);
 
-// 中斷回調函數
+// 中断回调函数
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin);
 /* USER CODE END PFP */
 
@@ -204,93 +201,85 @@ int _write(int file, char *ptr, int len) {
     return len;
 }
 
-// USART3 測試函數
-void Test_USART3_Loopback(void) {
-    DEBUG_PRINTF("測試USART3迴路...\r\n");
-
-    // 暫時短接PB10和PC5進行迴路測試
-    uint8_t test_data[] = "TEST";
-    uint8_t rx_data[10] = {0};
-
-    DEBUG_PRINTF("發送數據: %s\r\n", test_data);
-    HAL_StatusTypeDef tx_result = HAL_UART_Transmit(&huart3, test_data, 4, 100);
-    DEBUG_PRINTF("發送結果: %s\r\n", (tx_result == HAL_OK) ? "成功" : "失敗");
-
-    HAL_StatusTypeDef rx_result = HAL_UART_Receive(&huart3, rx_data, 4, 1000);
-    DEBUG_PRINTF("接收結果: %s\r\n", (rx_result == HAL_OK) ? "成功" : "超時");
-
-    if (rx_result == HAL_OK) {
-        DEBUG_PRINTF("接收到的數據: %s\r\n", rx_data);
-        if (memcmp(test_data, rx_data, 4) == 0) {
-            DEBUG_PRINTF("✓ USART3迴路測試: 成功\r\n");
-        } else {
-            DEBUG_PRINTF("✗ USART3迴路測試: 數據不匹配\r\n");
-        }
-    } else {
-        DEBUG_PRINTF("✗ USART3迴路測試: 失敗\r\n");
-    }
-}
-
-void Test_USART3_Raw(void) {
-    DEBUG_PRINTF("測試USART3原始通訊...\r\n");
-
-    // A1-16基本狀態查詢命令 (ID=9)
-    uint8_t test_cmd[] = {0xFF, 0xFF, 0x07, 0x09, 0x07, 0x00, 0x00};
-    HAL_StatusTypeDef tx_result = HAL_UART_Transmit(&huart3, test_cmd, 7, 100);
-    DEBUG_PRINTF("USART3 發送A1-16命令結果: %s\r\n", (tx_result == HAL_OK) ? "成功" : "失敗");
-
-    uint8_t rx_buffer[50];
-    HAL_StatusTypeDef rx_result = HAL_UART_Receive(&huart3, rx_buffer, 50, 500);
-    DEBUG_PRINTF("USART3 接收A1-16響應: %s\r\n", (rx_result == HAL_OK) ? "有響應" : "無響應");
-
-    if (rx_result == HAL_OK) {
-        DEBUG_PRINTF("響應數據: ");
-        for (int i = 0; i < 10; i++) {
-            DEBUG_PRINTF("0x%02X ", rx_buffer[i]);
-        }
-        DEBUG_PRINTF("\r\n");
-    }
-}
-
-// 設置舵機ID的專用函數
-HAL_StatusTypeDef Setup_ServoIDs(void) {
-    DEBUG_PRINTF("\r\n=== 設置舵機ID ===\r\n");
+// 设置新的舵机ID：1,2,3,4 (从原来的7,8改过来)
+HAL_StatusTypeDef Setup_NewServoIDs(void) {
+    DEBUG_PRINTF("\r\n=== 设置新的舵机ID (7,8 → 1,2,3,4) ===\r\n");
+    DEBUG_PRINTF("警告：此操作将永久修改舵机ID！\r\n");
+    DEBUG_PRINTF("请确保已将所有舵机串联连接到USART1\r\n");
+    HAL_Delay(3000);
 
     A1_16_Handle temp_handle;
-    HAL_StatusTypeDef result;
+    bool success = false;
 
-    // 初始化臨時處理器用於USART3上的舵機
-    // 假設後輪舵機當前ID是7和8，需要改為9和10
-
-    // 將USART3上的ID=7改為ID=9 (左後輪)
-    DEBUG_PRINTF("正在將USART3上的ID=7改為ID=9...\r\n");
-    A1_16_Init(&temp_handle, &huart3, 7, "TempHandle");
-    result = A1_16_SetID(&temp_handle, 7, 9);
-    if (result == HAL_OK) {
-        DEBUG_PRINTF("✓ 成功將舵機ID從7改為9\r\n");
-        HAL_Delay(1000);  // 等待舵機重新啟動
-    } else {
-        DEBUG_PRINTF("✗ 設置舵機ID=9失敗\r\n");
-        return result;
+    // 扫描当前可用的舵机
+    DEBUG_PRINTF("扫描当前舵机ID...\r\n");
+    for (uint8_t id = 1; id <= 15; id++) {
+        A1_16_Init(&temp_handle, &huart1, id, "Scan");
+        A1_16_Status status;
+        if (A1_16_GetStatus(&temp_handle, &status) == HAL_OK) {
+            DEBUG_PRINTF("发现舵机ID: %d\r\n", id);
+        }
+        HAL_Delay(100);
     }
 
-    // 將USART3上的ID=8改為ID=10 (右後輪)
-    DEBUG_PRINTF("正在將USART3上的ID=8改為ID=10...\r\n");
-    A1_16_Init(&temp_handle, &huart3, 8, "TempHandle");
-    result = A1_16_SetID(&temp_handle, 8, 10);
-    if (result == HAL_OK) {
-        DEBUG_PRINTF("✓ 成功將舵機ID從8改為10\r\n");
-        HAL_Delay(1000);  // 等待舵機重新啟動
+    DEBUG_PRINTF("\r\n开始设置新ID...\r\n");
+
+    // 第一步：将第一个ID=7改为ID=1
+    DEBUG_PRINTF("1. 设置第一个舵机: ID=7 → ID=1\r\n");
+    A1_16_Init(&temp_handle, &huart1, 7, "Temp1");
+    if (A1_16_SetID(&temp_handle, 7, 1) == HAL_OK) {
+        DEBUG_PRINTF("✓ 第一个舵机ID修改成功: 7 → 1\r\n");
+        A1_16_Reboot(&temp_handle);
+        HAL_Delay(2000);
+        success = true;
     } else {
-        DEBUG_PRINTF("✗ 設置舵機ID=10失敗\r\n");
-        return result;
+        DEBUG_PRINTF("✗ 第一个舵机ID修改失败\r\n");
     }
 
-    DEBUG_PRINTF("=== 舵機ID設置完成 ===\r\n");
-    return HAL_OK;
+    // 第二步：将第一个ID=8改为ID=2
+    DEBUG_PRINTF("2. 设置第二个舵机: ID=8 → ID=2\r\n");
+    A1_16_Init(&temp_handle, &huart1, 8, "Temp2");
+    if (A1_16_SetID(&temp_handle, 8, 2) == HAL_OK) {
+        DEBUG_PRINTF("✓ 第二个舵机ID修改成功: 8 → 2\r\n");
+        A1_16_Reboot(&temp_handle);
+        HAL_Delay(2000);
+    } else {
+        DEBUG_PRINTF("✗ 第二个舵机ID修改失败\r\n");
+    }
+
+    // 第三步：将第二个ID=7改为ID=3
+    DEBUG_PRINTF("3. 设置第三个舵机: ID=7 → ID=3\r\n");
+    A1_16_Init(&temp_handle, &huart1, 7, "Temp3");
+    if (A1_16_SetID(&temp_handle, 7, 3) == HAL_OK) {
+        DEBUG_PRINTF("✓ 第三个舵机ID修改成功: 7 → 3\r\n");
+        A1_16_Reboot(&temp_handle);
+        HAL_Delay(2000);
+    } else {
+        DEBUG_PRINTF("✗ 第三个舵机ID修改失败\r\n");
+    }
+
+    // 第四步：将第二个ID=8改为ID=4
+    DEBUG_PRINTF("4. 设置第四个舵机: ID=8 → ID=4\r\n");
+    A1_16_Init(&temp_handle, &huart1, 8, "Temp4");
+    if (A1_16_SetID(&temp_handle, 8, 4) == HAL_OK) {
+        DEBUG_PRINTF("✓ 第四个舵机ID修改成功: 8 → 4\r\n");
+        A1_16_Reboot(&temp_handle);
+        HAL_Delay(2000);
+    } else {
+        DEBUG_PRINTF("✗ 第四个舵机ID修改失败\r\n");
+    }
+
+    // 验证新ID
+    DEBUG_PRINTF("\r\n验证新的舵机ID...\r\n");
+    Scan_ServoIDs(&huart1, "USART1");
+
+    DEBUG_PRINTF("=== 舵机ID设置完成 ===\r\n");
+    DEBUG_PRINTF("请将代码中 SETUP_SERVO_IDS 改为 0 以避免重复设置\r\n");
+
+    return success ? HAL_OK : HAL_ERROR;
 }
 
-// A1-16舵機初始化
+// A1-16舵机初始化
 HAL_StatusTypeDef A1_16_Init(A1_16_Handle *handle, UART_HandleTypeDef *huart, uint8_t id, const char* name) {
     handle->huart = huart;
     handle->id = id;
@@ -305,18 +294,18 @@ HAL_StatusTypeDef A1_16_Init(A1_16_Handle *handle, UART_HandleTypeDef *huart, ui
     return HAL_OK;
 }
 
-// 設置舵機速度
+// 设置舵机速度
 HAL_StatusTypeDef A1_16_SetSpeed(A1_16_Handle *handle, int16_t speed) {
     uint8_t data[5];
     uint16_t speed_val;
 
-    // 記錄當前速度
+    // 记录当前速度
     handle->current_speed = speed;
 
-    // 轉換速度值 (負數表示反向)
+    // 转换速度值 (负数表示反向)
     if (speed < 0) {
         speed_val = (uint16_t)(-speed);
-        speed_val |= 0x8000; // 設置方向位
+        speed_val |= 0x8000; // 设置方向位
     } else {
         speed_val = (uint16_t)speed;
     }
@@ -330,7 +319,7 @@ HAL_StatusTypeDef A1_16_SetSpeed(A1_16_Handle *handle, int16_t speed) {
     return A1_16_SendPacket(handle, A1_16_CMD_I_JOG, data, 5);
 }
 
-// 獲取舵機狀態
+// 获取舵机状态
 HAL_StatusTypeDef A1_16_GetStatus(A1_16_Handle *handle, A1_16_Status *status) {
     HAL_StatusTypeDef ret;
 
@@ -352,25 +341,25 @@ HAL_StatusTypeDef A1_16_GetStatus(A1_16_Handle *handle, A1_16_Status *status) {
     return HAL_OK;
 }
 
-// 關閉扭矩
+// 关闭扭矩
 HAL_StatusTypeDef A1_16_TorqueOff(A1_16_Handle *handle) {
     uint8_t data[5] = {0, 0, A1_16_MODE_TORQUE_OFF, handle->id, 0};
     handle->current_speed = 0;
     return A1_16_SendPacket(handle, A1_16_CMD_I_JOG, data, 5);
 }
 
-// 開啟扭矩
+// 开启扭矩
 HAL_StatusTypeDef A1_16_TorqueOn(A1_16_Handle *handle) {
     uint8_t data[5] = {0, 0, A1_16_MODE_SERVO_ON, handle->id, 0};
     return A1_16_SendPacket(handle, A1_16_CMD_I_JOG, data, 5);
 }
 
-// 設置舵機ID
+// 设置舵机ID
 HAL_StatusTypeDef A1_16_SetID(A1_16_Handle *handle, uint8_t old_id, uint8_t new_id) {
     uint8_t data[3];
     handle->id = old_id;
 
-    data[0] = 6;        // EEPROM地址6是sID參數
+    data[0] = 6;        // EEPROM地址6是sID参数
     data[1] = 1;        // length
     data[2] = new_id;   // 新的ID值
 
@@ -384,14 +373,14 @@ HAL_StatusTypeDef A1_16_SetID(A1_16_Handle *handle, uint8_t old_id, uint8_t new_
     return HAL_OK;
 }
 
-// 重啟舵機
+// 重启舵机
 HAL_StatusTypeDef A1_16_Reboot(A1_16_Handle *handle) {
     HAL_StatusTypeDef ret = A1_16_SendPacket(handle, A1_16_CMD_REBOOT, NULL, 0);
     if (ret != HAL_OK) return ret;
     return A1_16_ReceiveResponse(handle, A1_16_CMD_REBOOT + 0x40, 500);
 }
 
-// 計算校驗和函數
+// 计算校验和函数
 static uint8_t A1_16_CalculateChecksum1(uint8_t *data, uint8_t length) {
     uint8_t checksum = 0;
     for (int i = 0; i < length; i++) {
@@ -404,7 +393,7 @@ static uint8_t A1_16_CalculateChecksum2(uint8_t checksum1) {
     return (~checksum1) & 0xFE;
 }
 
-// 發送數據包
+// 发送数据包
 static HAL_StatusTypeDef A1_16_SendPacket(A1_16_Handle *handle, uint8_t cmd, uint8_t *data, uint8_t data_len) {
     uint8_t packet_size = 7 + data_len;
     uint8_t checksum_data[100];
@@ -436,7 +425,7 @@ static HAL_StatusTypeDef A1_16_SendPacket(A1_16_Handle *handle, uint8_t cmd, uin
     return HAL_UART_Transmit(handle->huart, handle->tx_buffer, packet_size, 100);
 }
 
-// 接收響應
+// 接收响应
 static HAL_StatusTypeDef A1_16_ReceiveResponse(A1_16_Handle *handle, uint8_t expected_cmd, uint32_t timeout) {
     HAL_StatusTypeDef ret;
     uint32_t start_time = HAL_GetTick();
@@ -455,17 +444,17 @@ static HAL_StatusTypeDef A1_16_ReceiveResponse(A1_16_Handle *handle, uint8_t exp
     return HAL_TIMEOUT;
 }
 
-// 麥克納姆輪初始化 - 修改版本，使用新的舵機ID
+// 麦克纳姆轮初始化 - 全USART1版本，ID=1,2,3,4
 void Mecanum_Init(MecanumCar *car) {
-    DEBUG_PRINTF("\r\n=== 麥克納姆輪車初始化 ===\r\n");
+    DEBUG_PRINTF("\r\n=== 麦克纳姆轮车初始化 (全USART1版本) ===\r\n");
 
-    // 初始化各個輪子 - 注意後輪使用新的ID
-    A1_16_Init(&car->front_right, &huart1, 7, "FrontRight");  // USART1, ID=7
-    A1_16_Init(&car->front_left, &huart1, 8, "FrontLeft");    // USART1, ID=8
-    A1_16_Init(&car->rear_left, &huart3, 9, "RearLeft");      // USART3, ID=9 (修改)
-    A1_16_Init(&car->rear_right, &huart3, 10, "RearRight");   // USART3, ID=10 (修改)
+    // 初始化各个轮子 - 全部使用USART1，但使用不同ID
+    A1_16_Init(&car->front_right, &huart1, 1, "FrontRight");  // USART1, ID=1
+    A1_16_Init(&car->front_left, &huart1, 2, "FrontLeft");    // USART1, ID=2
+    A1_16_Init(&car->rear_left, &huart1, 3, "RearLeft");      // USART1, ID=3
+    A1_16_Init(&car->rear_right, &huart1, 4, "RearRight");    // USART1, ID=4
 
-    // 設置車輛參數
+    // 设置车辆参数
     car->wheel_radius = WHEEL_RADIUS;
     car->wheel_base = WHEEL_BASE;
     car->track_width = TRACK_WIDTH;
@@ -473,90 +462,89 @@ void Mecanum_Init(MecanumCar *car) {
 
     HAL_Delay(500);
 
-    // 檢查舵機連接
-    DEBUG_PRINTF("檢查舵機連接...\r\n");
-    Scan_ServoIDs(&huart1, "USART1(前輪)");
-    Scan_ServoIDs(&huart3, "USART3(後輪)");
+    // 检查舵机连接
+    DEBUG_PRINTF("检查舵机连接...\r\n");
+    Scan_ServoIDs(&huart1, "USART1(所有轮子)");
 
-    // 啟用所有輪子的扭矩
-    DEBUG_PRINTF("\r\n啟用舵機扭矩...\r\n");
+    // 启用所有轮子的扭矩
+    DEBUG_PRINTF("\r\n启用舵机扭矩...\r\n");
 
     if (A1_16_TorqueOn(&car->front_right) == HAL_OK) {
-        DEBUG_PRINTF("✓ 右前輪(USART1, ID=7)啟用成功\r\n");
+        DEBUG_PRINTF("✓ 右前轮(USART1, ID=1)启用成功\r\n");
     } else {
-        DEBUG_PRINTF("✗ 右前輪(USART1, ID=7)啟用失敗！\r\n");
+        DEBUG_PRINTF("✗ 右前轮(USART1, ID=1)启用失败！\r\n");
     }
     HAL_Delay(50);
 
     if (A1_16_TorqueOn(&car->front_left) == HAL_OK) {
-        DEBUG_PRINTF("✓ 左前輪(USART1, ID=8)啟用成功\r\n");
+        DEBUG_PRINTF("✓ 左前轮(USART1, ID=2)启用成功\r\n");
     } else {
-        DEBUG_PRINTF("✗ 左前輪(USART1, ID=8)啟用失敗！\r\n");
+        DEBUG_PRINTF("✗ 左前轮(USART1, ID=2)启用失败！\r\n");
     }
     HAL_Delay(50);
 
     if (A1_16_TorqueOn(&car->rear_left) == HAL_OK) {
-        DEBUG_PRINTF("✓ 左後輪(USART3, ID=9)啟用成功\r\n");
+        DEBUG_PRINTF("✓ 左后轮(USART1, ID=3)启用成功\r\n");
     } else {
-        DEBUG_PRINTF("✗ 左後輪(USART3, ID=9)啟用失敗！\r\n");
+        DEBUG_PRINTF("✗ 左后轮(USART1, ID=3)启用失败！\r\n");
     }
     HAL_Delay(50);
 
     if (A1_16_TorqueOn(&car->rear_right) == HAL_OK) {
-        DEBUG_PRINTF("✓ 右後輪(USART3, ID=10)啟用成功\r\n");
+        DEBUG_PRINTF("✓ 右后轮(USART1, ID=4)启用成功\r\n");
     } else {
-        DEBUG_PRINTF("✗ 右後輪(USART3, ID=10)啟用失敗！\r\n");
+        DEBUG_PRINTF("✗ 右后轮(USART1, ID=4)启用失败！\r\n");
     }
 
     car->initialized = true;
-    DEBUG_PRINTF("✓ 麥克納姆輪車初始化完成\r\n");
+    DEBUG_PRINTF("✓ 麦克纳姆轮车初始化完成\r\n");
 }
 
-// 麥克納姆輪運動學控制（精確版本）
+// 麦克纳姆轮运动学控制（精确版本）
 void Mecanum_SetVelocity(MecanumCar *car, float vx, float vy, float omega) {
     if (!car->initialized) return;
 
     float L = car->wheel_base / 2.0f;
     float W = car->track_width / 2.0f;
 
-    // 麥克納姆輪運動學逆解
+    // 麦克纳姆轮运动学逆解
     float v_fr = vx - vy - (L + W) * omega;  // 右前
     float v_fl = vx + vy + (L + W) * omega;  // 左前
-    float v_rl = vx - vy + (L + W) * omega;  // 左後
-    float v_rr = vx + vy - (L + W) * omega;  // 右後
+    float v_rl = vx - vy + (L + W) * omega;  // 左后
+    float v_rr = vx + vy - (L + W) * omega;  // 右后
 
-    // 轉換為舵機速度值並限制範圍
+    // 转换为舵机速度值并限制范围
     int16_t speed_fr = (int16_t)fmax(-MAX_SPEED, fmin(MAX_SPEED, v_fr * MAX_SPEED / 100.0f));
     int16_t speed_fl = (int16_t)fmax(-MAX_SPEED, fmin(MAX_SPEED, v_fl * MAX_SPEED / 100.0f));
     int16_t speed_rl = (int16_t)fmax(-MAX_SPEED, fmin(MAX_SPEED, v_rl * MAX_SPEED / 100.0f));
     int16_t speed_rr = (int16_t)fmax(-MAX_SPEED, fmin(MAX_SPEED, v_rr * MAX_SPEED / 100.0f));
 
-    // 發送速度命令
+    // 发送速度命令（增加延迟确保串行通讯稳定）
     A1_16_SetSpeed(&car->front_right, speed_fr);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->front_left, speed_fl);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_left, speed_rl);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_right, speed_rr);
 
     current_state = CAR_CUSTOM;
     last_command_time = HAL_GetTick();
 
-    DEBUG_PRINTF("自定義運動: FR=%d FL=%d RL=%d RR=%d\r\n", speed_fr, speed_fl, speed_rl, speed_rr);
+    DEBUG_PRINTF("自定义运动: FR=%d FL=%d RL=%d RR=%d\r\n", speed_fr, speed_fl, speed_rl, speed_rr);
 }
 
-// 基本運動函數
+// 基本运动函数
 void Mecanum_Forward(MecanumCar *car, int16_t speed) {
     if (!car->initialized) return;
 
-    DEBUG_PRINTF("前進，速度: %d\r\n", speed);
+    DEBUG_PRINTF("前进，速度: %d\r\n", speed);
     A1_16_SetSpeed(&car->front_right, speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->front_left, speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_left, speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_right, speed);
 
     current_state = CAR_FORWARD;
@@ -566,13 +554,13 @@ void Mecanum_Forward(MecanumCar *car, int16_t speed) {
 void Mecanum_Backward(MecanumCar *car, int16_t speed) {
     if (!car->initialized) return;
 
-    DEBUG_PRINTF("後退，速度: %d\r\n", speed);
+    DEBUG_PRINTF("后退，速度: %d\r\n", speed);
     A1_16_SetSpeed(&car->front_right, -speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->front_left, -speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_left, -speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_right, -speed);
 
     current_state = CAR_BACKWARD;
@@ -584,11 +572,11 @@ void Mecanum_StrafeLeft(MecanumCar *car, int16_t speed) {
 
     DEBUG_PRINTF("左平移，速度: %d\r\n", speed);
     A1_16_SetSpeed(&car->front_right, -speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->front_left, speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_left, -speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_right, speed);
 
     current_state = CAR_STRAFE_LEFT;
@@ -600,11 +588,11 @@ void Mecanum_StrafeRight(MecanumCar *car, int16_t speed) {
 
     DEBUG_PRINTF("右平移，速度: %d\r\n", speed);
     A1_16_SetSpeed(&car->front_right, speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->front_left, -speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_left, speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_right, -speed);
 
     current_state = CAR_STRAFE_RIGHT;
@@ -614,13 +602,13 @@ void Mecanum_StrafeRight(MecanumCar *car, int16_t speed) {
 void Mecanum_RotateLeft(MecanumCar *car, int16_t speed) {
     if (!car->initialized) return;
 
-    DEBUG_PRINTF("左旋轉，速度: %d\r\n", speed);
+    DEBUG_PRINTF("左旋转，速度: %d\r\n", speed);
     A1_16_SetSpeed(&car->front_right, speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->front_left, -speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_left, -speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_right, speed);
 
     current_state = CAR_ROTATE_LEFT;
@@ -630,13 +618,13 @@ void Mecanum_RotateLeft(MecanumCar *car, int16_t speed) {
 void Mecanum_RotateRight(MecanumCar *car, int16_t speed) {
     if (!car->initialized) return;
 
-    DEBUG_PRINTF("右旋轉，速度: %d\r\n", speed);
+    DEBUG_PRINTF("右旋转，速度: %d\r\n", speed);
     A1_16_SetSpeed(&car->front_right, -speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->front_left, speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_left, speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_right, -speed);
 
     current_state = CAR_ROTATE_RIGHT;
@@ -648,11 +636,11 @@ void Mecanum_DiagonalFrontLeft(MecanumCar *car, int16_t speed) {
 
     DEBUG_PRINTF("左前斜移，速度: %d\r\n", speed);
     A1_16_SetSpeed(&car->front_right, 0);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->front_left, speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_left, 0);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_right, speed);
 
     current_state = CAR_DIAGONAL_FL;
@@ -664,11 +652,11 @@ void Mecanum_DiagonalFrontRight(MecanumCar *car, int16_t speed) {
 
     DEBUG_PRINTF("右前斜移，速度: %d\r\n", speed);
     A1_16_SetSpeed(&car->front_right, speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->front_left, 0);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_left, speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_right, 0);
 
     current_state = CAR_DIAGONAL_FR;
@@ -678,13 +666,13 @@ void Mecanum_DiagonalFrontRight(MecanumCar *car, int16_t speed) {
 void Mecanum_DiagonalBackLeft(MecanumCar *car, int16_t speed) {
     if (!car->initialized) return;
 
-    DEBUG_PRINTF("左後斜移，速度: %d\r\n", speed);
+    DEBUG_PRINTF("左后斜移，速度: %d\r\n", speed);
     A1_16_SetSpeed(&car->front_right, -speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->front_left, 0);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_left, -speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_right, 0);
 
     current_state = CAR_DIAGONAL_BL;
@@ -694,13 +682,13 @@ void Mecanum_DiagonalBackLeft(MecanumCar *car, int16_t speed) {
 void Mecanum_DiagonalBackRight(MecanumCar *car, int16_t speed) {
     if (!car->initialized) return;
 
-    DEBUG_PRINTF("右後斜移，速度: %d\r\n", speed);
+    DEBUG_PRINTF("右后斜移，速度: %d\r\n", speed);
     A1_16_SetSpeed(&car->front_right, 0);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->front_left, -speed);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_left, 0);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_right, -speed);
 
     current_state = CAR_DIAGONAL_BR;
@@ -712,20 +700,20 @@ void Mecanum_Stop(MecanumCar *car) {
 
     DEBUG_PRINTF("停止\r\n");
     A1_16_SetSpeed(&car->front_right, 0);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->front_left, 0);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_left, 0);
-    HAL_Delay(5);
+    HAL_Delay(10);
     A1_16_SetSpeed(&car->rear_right, 0);
 
     current_state = CAR_STOP;
     last_command_time = HAL_GetTick();
 }
 
-// 測試函數
+// 测试函数
 void Test_IndividualWheel(A1_16_Handle *wheel, int16_t speed, uint32_t duration) {
-    DEBUG_PRINTF("測試 %s 輪子 (ID=%d)，速度=%d，持續%ldms\r\n",
+    DEBUG_PRINTF("测试 %s 轮子 (ID=%d)，速度=%d，持续%ldms\r\n",
            wheel->name, wheel->id, speed, duration);
 
     A1_16_SetSpeed(wheel, speed);
@@ -735,31 +723,31 @@ void Test_IndividualWheel(A1_16_Handle *wheel, int16_t speed, uint32_t duration)
 }
 
 void Test_AllWheels(MecanumCar *car) {
-    DEBUG_PRINTF("\r\n=== 單輪測試開始 ===\r\n");
+    DEBUG_PRINTF("\r\n=== 单轮测试开始 ===\r\n");
 
     Test_IndividualWheel(&car->front_right, 30, 2000);
     Test_IndividualWheel(&car->front_left, 30, 2000);
     Test_IndividualWheel(&car->rear_left, 30, 2000);
     Test_IndividualWheel(&car->rear_right, 30, 2000);
 
-    DEBUG_PRINTF("=== 單輪測試完成 ===\r\n\r\n");
+    DEBUG_PRINTF("=== 单轮测试完成 ===\r\n\r\n");
 }
 
 void Test_BasicMovements(MecanumCar *car) {
-    DEBUG_PRINTF("\r\n=== 基本運動測試 ===\r\n");
+    DEBUG_PRINTF("\r\n=== 基本运动测试 ===\r\n");
 
     const int16_t test_speed = 25;
     const uint32_t test_duration = 3000;
     const uint32_t stop_duration = 1000;
 
-    // 前進
+    // 前进
     Mecanum_Forward(car, test_speed);
     HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
     HAL_Delay(test_duration);
     Mecanum_Stop(car);
     HAL_Delay(stop_duration);
 
-    // 後退
+    // 后退
     Mecanum_Backward(car, test_speed);
     HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
     HAL_Delay(test_duration);
@@ -780,14 +768,14 @@ void Test_BasicMovements(MecanumCar *car) {
     Mecanum_Stop(car);
     HAL_Delay(stop_duration);
 
-    // 左旋轉
+    // 左旋转
     Mecanum_RotateLeft(car, 20);
     HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
     HAL_Delay(2000);
     Mecanum_Stop(car);
     HAL_Delay(stop_duration);
 
-    // 右旋轉
+    // 右旋转
     Mecanum_RotateRight(car, 20);
     HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
     HAL_Delay(2000);
@@ -796,9 +784,9 @@ void Test_BasicMovements(MecanumCar *car) {
 }
 
 void Test_AdvancedMovements(MecanumCar *car) {
-    DEBUG_PRINTF("\r\n=== 高級運動測試 ===\r\n");
+    DEBUG_PRINTF("\r\n=== 高级运动测试 ===\r\n");
 
-    // 斜向運動
+    // 斜向运动
     Mecanum_DiagonalFrontRight(car, 25);
     HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
     HAL_Delay(2000);
@@ -823,16 +811,16 @@ void Test_AdvancedMovements(MecanumCar *car) {
     Mecanum_Stop(car);
     HAL_Delay(1000);
 
-    // 組合運動：前進+左平移
-    DEBUG_PRINTF("組合運動：前進+左平移\r\n");
+    // 组合运动：前进+左平移
+    DEBUG_PRINTF("组合运动：前进+左平移\r\n");
     Mecanum_SetVelocity(car, 50.0f, -30.0f, 0.0f);
     HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
     HAL_Delay(3000);
     Mecanum_Stop(car);
     HAL_Delay(1000);
 
-    // 組合運動：前進+旋轉
-    DEBUG_PRINTF("組合運動：前進+旋轉\r\n");
+    // 组合运动：前进+旋转
+    DEBUG_PRINTF("组合运动：前进+旋转\r\n");
     Mecanum_SetVelocity(car, 40.0f, 0.0f, 0.5f);
     HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
     HAL_Delay(3000);
@@ -840,20 +828,20 @@ void Test_AdvancedMovements(MecanumCar *car) {
     HAL_Delay(1000);
 }
 
-// 檢查舵機狀態
+// 检查舵机状态
 void Check_ServoStatus(A1_16_Handle *handle) {
     A1_16_Status status;
     if (A1_16_GetStatus(handle, &status) == HAL_OK) {
-        DEBUG_PRINTF("%s (ID=%d): 位置=%d, 電流=%d, 溫度=%d℃, 電壓=%dV, 錯誤=0x%02X\r\n",
+        DEBUG_PRINTF("%s (ID=%d): 位置=%d, 电流=%d, 温度=%d℃, 电压=%dV, 错误=0x%02X\r\n",
                handle->name, handle->id, status.position, status.current,
                status.temperature, status.voltage/10, status.status_error);
     } else {
-        DEBUG_PRINTF("%s (ID=%d): 狀態讀取失敗\r\n", handle->name, handle->id);
+        DEBUG_PRINTF("%s (ID=%d): 状态读取失败\r\n", handle->name, handle->id);
     }
 }
 
 void Check_AllServos(MecanumCar *car) {
-    DEBUG_PRINTF("\r\n=== 舵機狀態檢查 ===\r\n");
+    DEBUG_PRINTF("\r\n=== 舵机状态检查 ===\r\n");
     Check_ServoStatus(&car->front_right);
     Check_ServoStatus(&car->front_left);
     Check_ServoStatus(&car->rear_left);
@@ -866,9 +854,9 @@ void Scan_ServoIDs(UART_HandleTypeDef *huart, const char* uart_name) {
     A1_16_Status status;
     bool found = false;
 
-    DEBUG_PRINTF("%s 掃描舵機ID: ", uart_name);
+    DEBUG_PRINTF("%s 扫描舵机ID: ", uart_name);
 
-    for (uint8_t id = 1; id <= 15; id++) {  // 擴展掃描範圍到15
+    for (uint8_t id = 1; id <= 15; id++) {  // 扫描ID 1-15
         A1_16_Init(&temp_handle, huart, id, "Test");
         if (A1_16_GetStatus(&temp_handle, &status) == HAL_OK) {
             DEBUG_PRINTF("%d ", id);
@@ -878,31 +866,31 @@ void Scan_ServoIDs(UART_HandleTypeDef *huart, const char* uart_name) {
     }
 
     if (!found) {
-        DEBUG_PRINTF("無響應");
+        DEBUG_PRINTF("无响应");
     }
     DEBUG_PRINTF("\r\n");
 }
 
-// 系統信息
+// 系统信息
 void System_Info(void) {
-    DEBUG_PRINTF("\r\n=== STM32 麥克納姆輪車控制系統 ===\r\n");
-    DEBUG_PRINTF("固件版本: v1.2 (修復ID衝突)\r\n");
-    DEBUG_PRINTF("系統時鐘: %ld MHz\r\n", HAL_RCC_GetHCLKFreq() / 1000000);
-    DEBUG_PRINTF("USART1: 前輪控制 (115200 bps) - ID: 7, 8\r\n");
-    DEBUG_PRINTF("USART2: 調試輸出 (115200 bps)\r\n");
-    DEBUG_PRINTF("USART3: 後輪控制 (115200 bps) - ID: 9, 10\r\n");
-    DEBUG_PRINTF("車輛參數: 輪半徑=%.1fmm, 軸距=%.1fmm, 輪距=%.1fmm\r\n",
+    DEBUG_PRINTF("\r\n=== STM32 麦克纳姆轮车控制系统 (全USART1版本) ===\r\n");
+    DEBUG_PRINTF("固件版本: v2.0 (全USART1版本)\r\n");
+    DEBUG_PRINTF("系统时钟: %ld MHz\r\n", HAL_RCC_GetHCLKFreq() / 1000000);
+    DEBUG_PRINTF("USART1: 所有舵机控制 (115200 bps) - ID: 1,2,3,4\r\n");
+    DEBUG_PRINTF("USART2: 调试输出 (115200 bps)\r\n");
+    DEBUG_PRINTF("舵机分配: 右前轮=ID1, 左前轮=ID2, 左后轮=ID3, 右后轮=ID4\r\n");
+    DEBUG_PRINTF("车辆参数: 轮半径=%.1fmm, 轴距=%.1fmm, 轮距=%.1fmm\r\n",
             WHEEL_RADIUS, WHEEL_BASE, TRACK_WIDTH);
-    DEBUG_PRINTF("按USER按鈕切換測試模式\r\n");
+    DEBUG_PRINTF("按USER按钮切换测试模式\r\n");
     DEBUG_PRINTF("=====================================\r\n");
 }
 
 void Change_TestMode(void) {
     test_mode = (test_mode + 1) % 4;
-    const char* mode_names[] = {"自動循環", "單輪測試", "基本運動", "高級運動"};
-    DEBUG_PRINTF("\r\n>>> 切換到模式 %d: %s <<<\r\n", test_mode, mode_names[test_mode]);
+    const char* mode_names[] = {"自动循环", "单轮测试", "基本运动", "高级运动"};
+    DEBUG_PRINTF("\r\n>>> 切换到模式 %d: %s <<<\r\n", test_mode, mode_names[test_mode]);
 
-    // 停止當前運動
+    // 停止当前运动
     Mecanum_Stop(&car);
     HAL_Delay(500);
 }
@@ -911,14 +899,14 @@ void Handle_ButtonPress(void) {
     static uint32_t last_press_time = 0;
     uint32_t current_time = HAL_GetTick();
 
-    // 防抖處理
+    // 防抖处理
     if (current_time - last_press_time > 200) {
         button_pressed = true;
         last_press_time = current_time;
     }
 }
 
-// GPIO中斷回調函數
+// GPIO中断回调函数
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
     if (GPIO_Pin == B1_Pin) {
         Handle_ButtonPress();
@@ -958,42 +946,44 @@ int main(void)
   MX_GPIO_Init();
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
-  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  // 系統啟動
-  HAL_Delay(1000);  // 等待系統穩定
+  // 系统启动
+  HAL_Delay(1000);  // 等待系统稳定
   System_Info();
 
-  // USART3硬體測試
-  DEBUG_PRINTF("\r\n=== USART3硬體測試 ===\r\n");
-  DEBUG_PRINTF("請注意：如需迴路測試，請短接PB10和PC5\r\n");
-  DEBUG_PRINTF("否則跳過迴路測試，進行舵機通訊測試\r\n");
-  HAL_Delay(2000);
+#if SETUP_SERVO_IDS
+  // *** 首次运行时设置舵机ID ***
+  DEBUG_PRINTF("\r\n!!! 警告：将执行舵机ID设置 !!!\r\n");
+  DEBUG_PRINTF("请确认：\r\n");
+  DEBUG_PRINTF("1. 所有4个舵机已串联连接到USART1\r\n");
+  DEBUG_PRINTF("2. 当前舵机ID为7,8 (各2个)\r\n");
+  DEBUG_PRINTF("3. 将被重新分配为ID=1,2,3,4\r\n");
+  HAL_Delay(5000);
 
-  // 迴路測試（需要短接PB10和PC5）
-  DEBUG_PRINTF("\r\n1. USART3迴路測試:\r\n");
-  Test_USART3_Loopback();
+  Setup_NewServoIDs();
 
-  HAL_Delay(1000);
+  DEBUG_PRINTF("\r\n设置完成！请将代码中 SETUP_SERVO_IDS 改为 0\r\n");
+  DEBUG_PRINTF("然后重新编译上传程序。\r\n");
+  while(1) {
+    HAL_Delay(1000);
+    HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+  }
+#endif
 
-  // 原始舵機通訊測試
-  DEBUG_PRINTF("\r\n2. USART3舵機通訊測試:\r\n");
-  Test_USART3_Raw();
+  // 检查舵机连接
+  DEBUG_PRINTF("检查舵机连接...\r\n");
+  Scan_ServoIDs(&huart1, "USART1(所有轮子)");
 
-  // *** 重要：首次運行時需要設置舵機ID ***
-  // 如果這是首次配置，請取消註釋下面這行
-  // Setup_ServoIDs();
-
-  // 初始化麥克納姆輪車
+  // 初始化麦克纳姆轮车
   Mecanum_Init(&car);
 
-  // 啟動後狀態檢查
+  // 启动后状态检查
   if (DEBUG_SERVO_STATUS) {
       Check_AllServos(&car);
   }
 
-  DEBUG_PRINTF("\r\n=== 系統準備就緒，開始測試 ===\r\n");
+  DEBUG_PRINTF("\r\n=== 系统准备就绪，开始测试 ===\r\n");
 
   /* USER CODE END 2 */
 
@@ -1005,40 +995,40 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-    // 處理按鈕按下事件
+    // 处理按钮按下事件
     if (button_pressed) {
         button_pressed = false;
         Change_TestMode();
     }
 
-    // 根據測試模式執行不同的測試
+    // 根据测试模式执行不同的测试
     switch(test_mode) {
-        case 0:  // 自動循環測試
+        case 0:  // 自动循环测试
             Test_BasicMovements(&car);
             break;
 
-        case 1:  // 單輪測試
+        case 1:  // 单轮测试
             Test_AllWheels(&car);
             HAL_Delay(2000);
             break;
 
-        case 2:  // 基本運動測試
+        case 2:  // 基本运动测试
             Test_BasicMovements(&car);
             break;
 
-        case 3:  // 高級運動測試
+        case 3:  // 高级运动测试
             Test_AdvancedMovements(&car);
             break;
     }
 
-    // 測試間隔
-    DEBUG_PRINTF("\r\n=== 測試循環完成，5秒後重新開始 ===\r\n");
+    // 测试间隔
+    DEBUG_PRINTF("\r\n=== 测试循环完成，5秒后重新开始 ===\r\n");
     for(int i = 5; i > 0; i--) {
-        DEBUG_PRINTF("倒數: %d (按按鈕切換模式)\r\n", i);
+        DEBUG_PRINTF("倒数: %d (按按钮切换模式)\r\n", i);
         HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
         HAL_Delay(1000);
 
-        // 檢查按鈕
+        // 检查按钮
         if (button_pressed) {
             break;
         }
@@ -1157,39 +1147,6 @@ static void MX_USART2_UART_Init(void)
   /* USER CODE BEGIN USART2_Init 2 */
 
   /* USER CODE END USART2_Init 2 */
-
-}
-
-/**
-  * @brief USART3 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART3_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART3_Init 0 */
-
-  /* USER CODE END USART3_Init 0 */
-
-  /* USER CODE BEGIN USART3_Init 1 */
-
-  /* USER CODE END USART3_Init 1 */
-  huart3.Instance = USART3;
-  huart3.Init.BaudRate = 115200;
-  huart3.Init.WordLength = UART_WORDLENGTH_8B;
-  huart3.Init.StopBits = UART_STOPBITS_1;
-  huart3.Init.Parity = UART_PARITY_NONE;
-  huart3.Init.Mode = UART_MODE_TX_RX;
-  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART3_Init 2 */
-
-  /* USER CODE END USART3_Init 2 */
 
 }
 
